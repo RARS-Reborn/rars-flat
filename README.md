@@ -1,6 +1,11 @@
 RARS -- RISC-V Assembler and Runtime Simulator
 ----------------------------------------------
 
+> This fork adds the modern [FlatLaf](https://www.formdev.com/flatlaf/) Look and Feel
+> customization to RARS.
+> 
+> Future work required to make it look decent for real world use.
+
 RARS, the RISC-V Assembler, Simulator, and Runtime, will assemble and simulate
 the execution of RISC-V assembly language programs. Its primary goal is to be
 an effective development environment for people getting started with RISC-V. 

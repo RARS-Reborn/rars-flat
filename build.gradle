@@ -13,6 +13,7 @@ repositories {
 
 dependencies {
     implementation 'com.github.rars-reborn:JSoftFloat:0.2.1'
+    implementation 'com.formdev:flatlaf:3.2.5'
 
 	testImplementation platform('org.junit:junit-bom:5.10.1')
 	testImplementation 'org.junit.jupiter:junit-jupiter'

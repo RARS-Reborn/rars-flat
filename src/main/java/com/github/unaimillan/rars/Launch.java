@@ -1,5 +1,6 @@
 package com.github.unaimillan.rars;
 
+import com.formdev.flatlaf.FlatLightLaf;
 import com.github.unaimillan.rars.api.Options;
 import com.github.unaimillan.rars.api.Program;
 import com.github.unaimillan.rars.riscv.InstructionSet;
@@ -133,6 +134,7 @@ public class Launch {
         new Launch(args);
     }
     private Launch(String[] args) {
+        FlatLightLaf.setup();
         Globals.initialize();
 
         options = new Options();
