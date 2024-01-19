@@ -8,47 +8,224 @@ import com.github.unaimillan.rars.util.Binary;
 import com.github.unaimillan.rars.util.MemoryDump;
 
 import java.io.File;
-import java.util.ArrayList;
+import java.util.*;
+import java.util.stream.Collectors;
 
-public class Parser {
+import picocli.CommandLine;
+import picocli.CommandLine.Mixin;
+import picocli.CommandLine.Option;
+import picocli.CommandLine.Command;
+import picocli.CommandLine.Parameters;
+import picocli.CommandLine.IParameterConsumer;
+
+public class Parser implements Runnable{
+    @Mixin
+    public Options options;
+
+    @Parameters(parameterConsumer = IgnoreNumbers.class, description = "Files to execute. If more than one filename is listed, the first is assumed to be the main unless the global statement label 'main' is defined in one of the files. Exception handler not automatically assembled.  Add it to the file list. Options used here do not affect RARS Settings menu values and vice versa.")
+    private File[] files = new File[0]; // calls 2 times with all arguments and without numbers. How to call only without numbers
+
+    static class IgnoreNumbers implements IParameterConsumer {
+        @Override
+        public void consumeParameters(Stack<String> stack, CommandLine.Model.ArgSpec argSpec, CommandLine.Model.CommandSpec commandSpec) { //why evoked several times????
+//            System.out.println(stack.size() + " " + stack.peek());
+            File[] old = argSpec.getValue();
+            List<File> files = new LinkedList<>(Arrays.asList(old));
+            for (int i = stack.size() - 1; i >= 0; i--) {
+                try { // should be unnecessary in future
+                    Integer.parseInt(stack.get(i));
+                    stack.remove(i);
+                } catch (NumberFormatException ignore) {
+                    File temp = new File(stack.get(i));
+                    if (temp.exists() && !temp.isDirectory()) {
+                        files.add(temp);
+                        stack.remove(i);
+                    }
+                }
+            }
+            File[] newFiles = new File[files.size()];
+            newFiles = files.toArray(newFiles);
+            argSpec.setValue(newFiles);
+//            System.out.println(argSpec);
+        }
+    }
+
+    @Option(names = { "-h", "--help" }, usageHelp = true, description = "display a help message")
+    private boolean helpRequested = false;
+
+    @Option(names = "-g", description = "force GUI mode")
     private boolean gui;
+    @Option(names = "-a", description = "assemble only, do not simulate", defaultValue = "true")
     private boolean simulate;
+    @Option(names = "--rv64", description = "Enables 64 bit assembly and executables (Not fully compatible with rv32)")
     private boolean rv64;
-    private DisplayFormat displayFormat;
+    @Option(names = "-b", description = "brief - do not display register/memory address along with contents",
+            defaultValue = "true")
     private boolean verbose;  // display register name or address along with contents
+    @Option(names = "-p", description = "Project mode - assemble all files in the same directory as given file")
     private boolean assembleProject; // assemble only the given file or all files in its directory
+    @Option(names = "--ic", description = "display count of basic instructions 'executed'")
     private boolean countInstructions; // Whether to count and report number of instructions executed
+    @Option(names = "--nc", description = "do not display copyright notice (for cleaner redirected/piped output)",
+            defaultValue = "true")
     private boolean displayCopyright; // Default: true // "nc": false
+
+    @Option(names = "--ae", description = "terminate RARS with integer exit code <n> if an assemble error occurs",
+            defaultValue = "0", paramLabel = "<n>")
     private int assembleErrorExitCode;  // RARS command exit code to return if assemble error occurs
-    private int simulateErrorExitCode;// RARS command exit code to return if simulation error occurs
+    @Option(names = "--se", description = "terminate RARS with integer exit code <n> if a simulation (run) error occurs",
+            defaultValue = "0", paramLabel = "<n>")
+    private int simulateErrorExitCode; // RARS command exit code to return if simulation error occurs
 
-    private final ArrayList<String> registerDisplayList;
-    private final ArrayList<String> memoryDisplayList;
-    private final ArrayList<String> filenameList;
+    @Option(paramLabel = "<arguments>", arity = "0..*", names = "--pa", description = "Program Arguments follow in a space-separated list. This option must be placed AFTER ALL FILE NAMES, because everything that follows it is interpreted as a program argument to be made available to the program at runtime.")
+    private ArrayList<String> programArgumentList = new ArrayList<>(); // optional program args for program (becomes argc, argv)
+
+    @Parameters(parameterConsumer = RangeConsumer.class, paramLabel = "<m>-<n>", description = "memory address range from <m> to <n> whose contents to display at end of run. <m> and <n> may be hex or decimal, must be on word boundary, <m> <= <n>.  Option may be repeated.") // Are you sure?
+    private final ArrayList<String> memoryDisplayList = new ArrayList<>();
+
+    static class RangeConsumer implements IParameterConsumer {
+        @Override
+        public void consumeParameters(Stack<String> stack, CommandLine.Model.ArgSpec argSpec, CommandLine.Model.CommandSpec commandSpec) {
+            ArrayList<String> temp = argSpec.getValue();
+            for(int i = stack.size() - 1; i >= 0; i--) {
+                String arg = stack.get(i);
+                String[] memoryRange = null;
+                if (arg.indexOf(rangeSeparator) > 0 &&
+                        arg.indexOf(rangeSeparator) < arg.length() - 1) { // -a -g --mc
+                    // assume correct format, two numbers separated by -, no embedded spaces.
+                    // If that doesn't work it is invalid.
+                    memoryRange = new String[2];
+                    memoryRange[0] = arg.substring(0, arg.indexOf(rangeSeparator));
+                    memoryRange[1] = arg.substring(arg.indexOf(rangeSeparator) + 1);
+                    // NOTE: I will use homegrown decoder, because Integer.decode will throw
+                    // exception on address higher than 0x7FFFFFFF (e.g. sign bit is 1).
+                    if (Binary.stringToInt(memoryRange[0]) > Binary.stringToInt(memoryRange[1]) ||
+                            !Memory.wordAligned(Binary.stringToInt(memoryRange[0])) ||
+                            !Memory.wordAligned(Binary.stringToInt(memoryRange[1]))) {
+                        throw new NumberFormatException();
+                    }
+                    temp.add(memoryRange[0]);
+                    temp.add(memoryRange[1]);
+                    stack.remove(i);
+                }
+            }
+            argSpec.setValue(temp);
+        }
+    }
+
+    @Parameters(parameterConsumer = regByNumConsumer.class, paramLabel = "x<reg>", description = "where <reg> is number or name (e.g. 5, t3, f10) of register whose content to display at end of run.  Option may be repeated.")
+    private final ArrayList<String> registerByNumber = new ArrayList<>();
+
+    static class regByNumConsumer implements IParameterConsumer {
+        @Override
+        public void consumeParameters(Stack<String> stack, CommandLine.Model.ArgSpec argSpec, CommandLine.Model.CommandSpec commandSpec) {
+            ArrayList<String> temp = argSpec.getValue();
+            for(int i = stack.size() - 1; i >= 0; i--) {
+                String arg = stack.get(i);
+                if (arg.indexOf("x") == 0) {
+                    if (RegisterFile.getRegister(arg) == null &&
+                            FloatingPointRegisterFile.getRegister(arg) == null) {
+                        Launch.out.println("Invalid Register Name: " + arg); //shouldn't it throw error?
+                    } else {
+                        temp.add(arg);
+
+                    }
+                    stack.remove(i); //needed?
+                }
+            }
+            argSpec.setValue(temp);
+        }
+    }
+
+    @Parameters(parameterConsumer = regByNameConsumer.class, paramLabel = "<reg_name>", description = "where <reg_name> is name (e.g. t3, f10) of register whose content to display at end of run.  Option may be repeated.")
+    private final ArrayList<String> registerByName = new ArrayList<>();
+
+    static class regByNameConsumer implements IParameterConsumer {
+        @Override
+        public void consumeParameters(Stack<String> stack, CommandLine.Model.ArgSpec argSpec, CommandLine.Model.CommandSpec commandSpec) {
+            ArrayList<String> temp = argSpec.getValue();
+            for(int i = stack.size() - 1; i >= 0; i--) {
+                String arg = stack.get(i);
+                if (RegisterFile.getRegister(arg) != null ||
+                        FloatingPointRegisterFile.getRegister(arg) != null) {
+                    temp.add(arg);
+                    stack.remove(i);
+                }
+            }
+            argSpec.setValue(temp);
+        }
+    }
+
+    private DisplayFormat displayFormat = DisplayFormat.HEXADECIMAL;
+    private final ArrayList<String> registerDisplayList = new ArrayList<>();
+    private final ArrayList<String> filenameList = new ArrayList<>();
     private ArrayList<String[]> dumpTriples = null; // each element holds 3 arguments for dump option
-    private ArrayList<String> programArgumentList; // optional program args for program (becomes argc, argv)
-
     private static final String rangeSeparator = "-";
-
-    private int instructionCount;
     private final String[] args;
+
+    @Command(name = "--me", description = "display RARS messages to standard err instead of standard out. " +
+            "Can separate messages from program output using redirection")
+    private void changeOut() {
+        Launch.out = System.err;
+    }
+
+    @Command(name = "-d", description = "display RARS debugging statements")
+    private void setDebug() {
+        Globals.debug = true;
+    }
+
+    @Command(name = "--ascii", description = "display memory or register contents interpreted as ASCII codes")
+    private void displayAscii() {
+        displayFormat = DisplayFormat.ASCII;
+    }
+
+    @Command(name = "--dec", description = "display memory or register contents in decimal")
+    private void displayDecimal() {
+        displayFormat = DisplayFormat.DECIMAL;
+    }
+
+    @Command(name = "--hex", description = "display memory or register contents in hexadecimal (default)")
+    private void displayHexadecimal() {
+        displayFormat = DisplayFormat.HEXADECIMAL;
+    }
+
+    @Command(name = "--mc", description = "set memory configuration")
+    private void setMemoryConfig(@Parameters(arity = "1", paramLabel = "<config>",
+            description = "is case-sensitive and possible values are: Default for the default 32-bit address space, CompactDataAtZero for a 32KB memory with data segment at address 0, or CompactTextAtZero for a 32KB memory with text segment at address 0") String configName) throws Exception { //Maybe another one is needed
+        MemoryConfiguration config = MemoryConfigurations.getConfigurationByName(configName);
+        if (config == null) {
+            throw new Exception("Invalid memory configuration: " + configName);
+        } else {
+            MemoryConfigurations.setCurrentConfiguration(config);
+        }
+    }
+
+    @Command(name = "--dump", description = "memory dump of specified memory segment in specified format to specified file. Option may be repeated (not yet). Dump occurs at the end of simulation unless 'a' option is used.")
+    private void dump(@Parameters(paramLabel = "<segment>", description = ".text, .data, or a range like 0x400000-0x10000000") String segment,
+                      @Parameters(paramLabel = "<format>", description = "AsciiText, Binary, BinaryText, HexText, HEX, SegmentWindow") String format,
+                      @Parameters(paramLabel = "<file>") File file) {
+        if (dumpTriples == null)
+            dumpTriples = new ArrayList<>();
+        dumpTriples.add(new String[]{segment, format, file.getPath()});
+    }
+
 
     public Parser(String[] args){
         this.args = args;
+        options = new Options();
         gui = args.length == 0;
-        simulate = true;
-        displayFormat = DisplayFormat.HEXADECIMAL;
-        verbose = true;
-        assembleProject = false;
-        countInstructions = false;
-        displayCopyright = true;
-        assembleErrorExitCode = 0;
-        simulateErrorExitCode = 0;
-        Launch.out = System.out;
-        instructionCount = 0; //WTF? It's not used. Was private in Launch but Ctrl + F didn't find any usages there
-        registerDisplayList = new ArrayList<>();
-        memoryDisplayList = new ArrayList<>();
-        filenameList = new ArrayList<>();
+        registerDisplayList.addAll(registerByNumber);
+        registerDisplayList.addAll(registerByName);
+    }
+
+    public void parseCommandArgs() {
+        new CommandLine(this)
+                .setOptionsCaseInsensitive(true)
+                .setSubcommandsCaseInsensitive(true)
+                .execute(args);
+        for (File file : files) {
+            filenameList.add(file.getPath());
+        }
     }
 
     //////////////////////////////////////////////////////////////////////
@@ -57,7 +234,7 @@ public class Parser {
     // element.  Here, we check for validity, set switch variables as appropriate
     // and build data structures.  For help option (h), display the help.
     // Returns true if command args parse OK, false otherwise.
-    public void parseCommandArgs(Options options) throws Exception{ //ParameterException
+    public void XparseCommandArgs(Options options) throws Exception{ //ParameterException
         String noCopyrightSwitch = "nc";
         String displayMessagesToErrSwitch = "me";
         boolean inProgramArgumentList = false;
@@ -420,5 +597,10 @@ public class Parser {
 
     public ArrayList<String> getMemoryDisplayList() {
         return memoryDisplayList;
+    }
+
+    @Override
+    public void run() {
+        return;
     }
 }

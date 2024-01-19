@@ -1,7 +1,6 @@
 package com.github.unaimillan.rars;
 
 import com.formdev.flatlaf.FlatLightLaf;
-import com.github.unaimillan.rars.api.Options;
 import com.github.unaimillan.rars.api.Program;
 import com.github.unaimillan.rars.riscv.InstructionSet;
 import com.github.unaimillan.rars.riscv.dump.DumpFormat;
@@ -20,6 +19,8 @@ import java.io.IOException;
 import java.io.PrintStream;
 import java.util.ArrayList;
 import java.util.Iterator;
+
+import static java.lang.System.exit;
 
 /*
 Copyright (c) 2003-2012,  Pete Sanderson and Kenneth Vollmar
@@ -106,13 +107,10 @@ public class Launch {
      * that follows it is interpreted as a program argument to be<br>
      * made available to the program at runtime.<br>
      **/
-
-    private static Options options;
     private static Parser parser;
     private static final int memoryWordsPerLine = 4; // display 4 memory words, tab separated, per line
-    public static PrintStream out; // stream for display of command line output // Default: System.out // "me": System.err
+    public static PrintStream out = System.out; // stream for display of command line output // Default: System.out // "me": System.err
     public static void main(String[] args){
-        options = new Options();
         parser = new Parser(args);
         new Launch();
     }
@@ -122,10 +120,10 @@ public class Launch {
         MemoryConfigurations.setCurrentConfiguration(MemoryConfigurations.getDefaultConfiguration());
 
         try {
-            parser.parseCommandArgs(options);
+            parser.parseCommandArgs();
         }catch (Exception e){ //ParameterException
             out.println(e.getMessage());
-            System.exit(Globals.exitCode);
+            exit(Globals.exitCode);
         }
         displayCopyright();
         
@@ -136,7 +134,7 @@ public class Launch {
             System.setProperty("java.awt.headless", "true");
             
             dumpSegments(runCommand());
-            System.exit(Globals.exitCode);
+            exit(Globals.exitCode);
         }
     }
 
@@ -160,7 +158,7 @@ public class Launch {
             // If not segment name, see if it is address range instead.  DPS 14-July-2008
             if (segInfo == null) {
                 try {
-                    String[] memoryRange = parser.checkMemoryAddressRange(triple[0]);
+                    String[] memoryRange = parser.checkMemoryAddressRange(triple[0]); //why checking again???
                     segInfo = new Integer[2];
                     segInfo[0] = Binary.stringToInt(memoryRange[0]); // low end of range
                     segInfo[1] = Binary.stringToInt(memoryRange[1]); // high end of range
@@ -249,7 +247,7 @@ public class Launch {
         } else {
             filesToAssemble = FilenameFinder.getFilenameList(filenameList, FilenameFinder.MATCH_ALL_EXTENSIONS);
         }
-        Program program = new Program(options);
+        Program program = new Program(parser.options);
         try {
             if (Globals.debug) {
                 out.println("---  TOKENIZING & ASSEMBLY BEGINS  ---");
@@ -274,7 +272,7 @@ public class Launch {
                 while (true) {
                     Simulator.Reason done = program.simulate();
                     if (done == Simulator.Reason.MAX_STEPS) {
-                        out.println("\nProgram terminated when maximum step limit " + options.maxSteps + " reached.");
+                        out.println("\nProgram terminated when maximum step limit " + parser.options.maxSteps + " reached.");
                         break;
                     } else if (done == Simulator.Reason.CLIFF_TERMINATION) {
                         out.println("\nProgram terminated by dropping off the bottom.");
@@ -338,6 +336,9 @@ public class Launch {
                 }
             } else if (ControlAndStatusRegisterFile.getRegister(reg) != null){
                 out.print(reg + "\t");
+                if (formatIntForDisplay((int)ControlAndStatusRegisterFile.getRegister(reg).getValue()) == null) {
+                    return;
+                }
                 out.println(formatIntForDisplay((int)ControlAndStatusRegisterFile.getRegister(reg).getValue()));
             } else if (parser.isVerbose()) {
                 out.print(reg + "\t");
