@@ -22,12 +22,9 @@ public class Options{
     static class NumbersConsumer implements IParameterConsumer {
         @Override
         public void consumeParameters(Stack<String> stack, CommandLine.Model.ArgSpec argSpec, CommandLine.Model.CommandSpec commandSpec) {
-            for(int i = stack.size() - 1; i >= 0; i--) {
-                try {
-                    argSpec.setValue(Integer.parseInt(stack.get(i)));
-                    stack.remove(i);
-                } catch (NumberFormatException ignore) {
-                }
+            try {
+                argSpec.setValue(Integer.parseInt(stack.peek()));
+            } catch (NumberFormatException ignore) {
             }
         }
     }
